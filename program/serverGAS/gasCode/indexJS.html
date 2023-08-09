@@ -1,0 +1,130 @@
+<script>
+
+/**
+ * GASで実装したLongPollingに対するJSでのクライアント側実装 
+ */
+class LongPolling{
+  constructor(url,initStatus=null){
+    this._url=url;
+    if(initStatus==null){
+      this._status={version:0};
+    }else{
+      this._status=initStatus;
+    }
+    
+    //Promiseによる非同期処理を用いて、setTimeoutにresolveを引数なしで呼び出すようにsetしてsleepを実現する
+    this._sleep = (sleep_ms)=>{new Promise(resolve => setTimeout(resolve,sleep_ms))};
+    /** 現行のtimeout時間 通信状態によってこれを調整する */
+    this._timeout_ms=5000;
+  }
+  async fetchWithTimeout(options,timeout_ms){
+    /**
+     * timeoutを持つfetch apiの実装は次による
+     * https://github.com/node-fetch/node-fetch#request-cancellation-with-abortsignal
+     * 調べる限りAbortControllerを使用するのがスマート
+     * 日本語で調べるとリソースを食いつぶしかねないPromise.raceを用いた実装が、なぜかトップに出てくるので注意
+     */
+    console.log(`inFetchWithTimoout :${timeout_ms}`);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => {
+      controller.abort();
+    }, timeout_ms);
+    let data=null;
+    try {
+      await this._sleep(300);
+      const response = await fetch(this._url, {
+        signal: controller.signal,
+        ...options
+      });
+      data = await response.text();
+    } catch (error) {
+      if (error.name==="AbortError") {
+        console.log('request was aborted');
+      }
+    } finally {
+      clearTimeout(timeout);
+    }
+    console.log(`received data: ${data}`);
+    return JSON.parse(data);
+  }
+  /**
+   * サーバから変更の通知があればstatusを返します。
+   * いずれかの原因でtimeoutしたときはnullを返します。
+   * @returns {(Object|null)}
+   */
+  async getChange(){
+    console.log(`timeout:${this._timeout_ms}ms`);
+    const tryTimeout_ms=this._timeout_ms;
+    const sendData=JSON.stringify({
+      timeout:tryTimeout_ms,
+      version:this._status.version
+    });
+    const data=await this.fetchWithTimeout({
+      method:"POST",
+      headers:{
+        // CORSのPreflight requestをGASのサーバは処理しない。(OPTIONSメソッドに対応しない)
+        // よってPreflight requestが飛ばないようにするためにSimple Requestにする必要がある。
+        // Simple RequestにするためにContent-Typeの種類に気を付けること。
+        // https://developer.mozilla.org/ja/docs/Web/HTTP/CORS#%E5%8D%98%E7%B4%94%E3%83%AA%E3%82%AF%E3%82%A8%E3%82%B9%E3%83%88
+        'Content-Type': 'text/plain',
+        // 'Content-Type': 'application/x-www-form-urlencoded'
+        // "Authorization": `Bearer ${authToken}`,
+        // 'Accept': 'application/json',
+
+      },
+      body:sendData,
+    },tryTimeout_ms+8000); //サーバの処理時間と通信経路にかかる時間を考慮して2000ms追加
+    if(data===null){
+      //通信が外部から切断されたとき
+      if(this._timeout_ms>1000){
+        this._timeout_ms-=100;
+      }
+      return null;
+    }else{
+      //通信がサーバからresponseの返却により正常に終了したとき
+      if(this._timeout_ms<28000){
+        this._timeout_ms+=100;
+      }
+      
+      if(data.ret==="change"){
+        this._status=data["status"];
+        return this._status;
+      }else{
+        return null;
+      }
+    }
+  }
+};
+
+const updateStatus=async(sts,key)=>{
+  const queryParams=new URLSearchParams({
+    type:"updateStatus",
+    key:key
+  });
+  const response=await fetch(`${selfUrl}?${queryParams}`,{
+    method:"POST",
+    body: JSON.stringify(sts),
+    headers:{
+      'Content-Type': 'text/plain',
+    }
+  });
+  console.log(response.text());
+}
+const showLed=async(info)=>{
+  // alert("本棚に点灯リクエストを送信しました。");
+  console.log("showLed was called with info:"+info);
+  const queryParams=new URLSearchParams({
+    type:"showLed"
+  });
+  const response=await fetch(`${selfUrl}?${queryParams}`,{
+    method:"POST",
+    body: JSON.stringify(info),
+    headers:{
+      'Content-Type': 'text/plain',
+    }
+  });
+  console.log(response.text());
+}
+
+
+</script>

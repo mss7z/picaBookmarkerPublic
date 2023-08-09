@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <?!= HtmlService.createHtmlOutputFromFile('indexJS').getContent(); ?>
+    <?!= HtmlService.createHtmlOutputFromFile('indexCSS').getContent(); ?>
+  </head>
+  <body id="motherBox">
+    <div id="contentBox">
+      <div id="headerBox">
+        <h1>ぴかっとブックマーカ</h1>
+        <div id="headerBtn">
+          <a id="moveToCurrentIndex">現在の本に固定</a>
+        </div>
+        
+        <div style="display:none;">
+          <input type="button" value="test led" onclick="showLed({key:'uid',val:'04688D8A757481'})">
+          <a href="javascript:alert('hey');">hey click</a><br>
+          <a href="javascript:console.log('hey');">ffffff</a>
+          <div id="statusBox"></div>
+        </div>
+        
+      </div>
+      <div id="infoBox">
+        <div id="readDiv"> <div class="infoBoxRW">
+          <table class="infoBoxTable">
+            <tr>
+              <td>本の名前</td>
+              <td id="name_read"></td>
+            </tr>
+            <tr>
+              <td>本の登録番号</td>
+              <td id="bookIndex_read"></td>
+            </tr>
+            <tr>
+              <td>タグのUID</td>
+              <td id="uid_read"></td>
+            </tr>
+            <tr>
+              <td>本棚上の位置</td>
+              <td id="pos_read"></td>
+            </tr>
+          </table>
+          <button onclick="showLedFromDisplay('pos_read')">この本を点灯</button>
+          <div class="infoBoxMainText">
+            <div id="mainText_read">
+            </div>
+          </div>
+        </div></div>
+        <div id="writeDiv"> <div class="infoBoxRW">
+          <table class="infoBoxTable">
+            <tr>
+              <td>本の名前</td>
+              <td><input id="name_write" type="text"></td>
+            </tr>
+            <tr>
+              <td>本の登録番号</td>
+              <td id="bookIndex_write"></td>
+            </tr>
+            <tr>
+              <td>タグのUID</td>
+              <td><input id="uid_write" type="text"></td>
+            </tr>
+            <tr>
+              <td>本棚上の位置</td>
+              <td><input id="pos_write" type="number"></td>
+            </tr>
+          </table>
+          <textarea id="mainText_write" class="infoBoxMainText"></textarea>
+          <button id="sendBtn">保存</button>
+        </div></div>
+        <div id="errorDiv"> <div class="infoBoxRW">
+          <div id="errorMsg"></div>
+        </div></div>
+      </div>
+    </div>
+    <div id="buttonBox">
+      <button id="enableReadDiv">読む</button>
+      <button id="enableWriteDiv">編集する</button>
+    </div>
+  </body>
+  <script>
+
+const selfUrl="<?!= ScriptApp.getService().getUrl() ?>";
+const isWebApp=selfUrl.endsWith("exec");
+let currentBookIndex=null;
+const currentKey=<?= currentKey ?>;
+console.log("currentKey set to "+currentKey);
+
+  let currentMode="read";
+  const changeButton=(mode=currentMode)=>{
+    console.log("changeButton called with "+ mode);
+    const readDiv=document.getElementById("readDiv");
+    const readEnableButton=document.getElementById("enableReadDiv");
+    const writeDiv=document.getElementById("writeDiv");
+    const writeEnableButton=document.getElementById("enableWriteDiv");
+    if(mode!=="error"){
+      readEnableButton.disabled=false;
+      writeEnableButton.disabled=false;
+    }
+    switch(mode){
+      case "read":
+      readDiv.style.display="block";
+      readEnableButton.dataset.btnstatus="SELECT";
+      writeDiv.style.display="none";
+      writeEnableButton.dataset.btnstatus="NOSELECT";
+      errorDiv.style.display="none";
+      break;
+      case "write":
+      readDiv.style.display="none";
+      readEnableButton.dataset.btnstatus="NOSELECT";
+      writeDiv.style.display="block";
+      writeEnableButton.dataset.btnstatus="SELECT";
+      errorDiv.style.display="none";
+      break;
+      case "error":
+      readDiv.style.display="none";
+      readEnableButton.dataset.btnstatus="DISABLE";
+      readEnableButton.disabled=true;
+      writeDiv.style.display="none";
+      writeEnableButton.dataset.btnstatus="DISABLE";
+      writeEnableButton.disabled=true;
+      errorDiv.style.display="block";
+      break;
+    }
+    currentMode=mode;
+  }
+  const displayMsg=(msg)=>{
+    changeButton("error");
+    document.getElementById("errorMsg").innerHTML=msg.replaceAll("\n","<br>");
+    console.log("success? displayMsg end");
+  };
+  const displayMsgEnd=()=>{
+    if(currentMode==="error"){
+      changeButton("read");
+    } 
+  };
+  document.getElementById("enableReadDiv").addEventListener("click",()=>{changeButton("read")});
+  document.getElementById("enableWriteDiv").addEventListener("click",()=>{changeButton("write")});
+  changeButton();
+
+  const genLinkHTML=(key,inner)=>{
+    const queryParams=new URLSearchParams({
+      key:key,
+    })
+    return `<a href="${selfUrl}?${queryParams}">${inner}</a>`;
+  }
+  const genShowLedHTML=(key,val,inner)=>{
+    
+    const jsonStr=JSON.stringify({
+      key:key,
+      val:val
+    });
+    return `<input type="button" value="${inner}" onclick="showLedSearch('${key}','${val}');">`;
+  }
+  const convMainTextWithLink=(str)=>{
+    let firstIndex=0;
+    const startStr=" [";
+    const endStr="] ";
+    let retStr="";
+    while(true){
+      const startIndexStart=str.indexOf(startStr,firstIndex);
+      if(startIndexStart===-1){
+        break;
+      }
+      const startIndexEnd=startIndexStart+startStr.length;
+      const endIndexStart=str.indexOf(endStr,startIndexEnd);
+      if(endIndexStart===-1){
+        break;
+      }
+      const endIndexEnd=endIndexStart+endStr.length;
+
+      const currentInner=str.substring(startIndexEnd,endIndexStart);
+      const currentLinkInner=str.substring(startIndexStart,endIndexEnd);
+      let currentLinkHTML="";
+      if(currentInner.indexOf("@")===0){
+        const cmds=currentInner.split("=");
+        if(cmds.length===2){
+          const key=cmds[0].substring(1); //@を削除
+          const val=cmds[1];
+          console.log(`key:${key} val:${val}`);
+          currentLinkHTML=genShowLedHTML(key,val,currentLinkInner);
+        }else{
+          currentLinkHTML=currentLinkInner;
+        }
+      }else{
+        if(currentInner.indexOf("=")===-1){
+          // 含まれていない、標準キーの時
+          currentLinkHTML=genLinkHTML(currentInner,currentLinkInner);
+        }else{
+          const key=`search_${currentInner.replace("=","_")}`;
+          currentLinkHTML=genLinkHTML(key,currentLinkInner);
+        }
+      }
+      
+
+      retStr+=str.substring(firstIndex,startIndexStart)+currentLinkHTML;
+      firstIndex=endIndexEnd;
+    }
+    retStr+=str.substring(firstIndex);
+    return retStr;
+  }
+  
+  const getDisplayData=()=>{
+    const dataKeyArray=[
+      "uid",
+      "pos",
+      "mainText",
+      "name"
+    ];
+    ret={};
+    for(const dataKey of dataKeyArray){
+      const elem=document.getElementById(
+        `${dataKey}_write`
+      );
+      if(elem!==null){
+        if(elem.tagName==="INPUT" || elem.tagName==="TEXTAREA"){
+          ret[dataKey]=elem.value;
+        }else{
+          ret[dataKey]=elem.innerHTML;
+        }
+      }
+    }
+    return ret;
+  }
+  const writeToDisplay=(data,suffix)=>{
+    const dataKeyArray=[
+      "uid",
+      "pos",
+      "mainText",
+      "name",
+      "bookIndex"
+    ];
+    // console.log("called writeToDisplay");
+    for(const dataKey of dataKeyArray){
+      // console.log("dataKey"+dataKey);
+      const elem=document.getElementById(
+        `${dataKey}_${suffix}`
+      );
+      if(elem!==null){
+        let targetData="";
+        if(dataKey in data){
+          targetData=data[dataKey];
+        }
+        // console.log("targetData"+targetData);
+        if(elem.tagName==="INPUT" || elem.tagName==="TEXTAREA"){
+          elem.value=targetData;
+        }else{
+          elem.innerHTML=targetData;
+        }
+        
+      }
+    }
+  }
+
+  console.log("helllllwllwlwlwlwlwlwlwlw??????????");
+  // const authToken="<?= ScriptApp.getOAuthToken() ?>";
+  console.log(selfUrl);
+
+  
+  
+  (async()=>{
+    const setReaderBtnFromStatus=(newStatus)=>{
+      for(let i=1;i<=10;i++){
+        const key=`nfc_${i}`;
+        const keyInMainStatus=`${key}_uid`;
+        const idInHtml=`moveToNfc_${i}`;
+        if(newStatus[keyInMainStatus]!=null){
+          if(document.getElementById(idInHtml)==null){
+            const headerBtn=document.getElementById("headerBtn");
+            const newBtn=document.createElement("a");
+            newBtn.innerHTML=`読み取り機${i}`;
+            newBtn.id=idInHtml;
+            headerBtn.appendChild(newBtn);
+            const queryParams=new URLSearchParams({
+              key:`nfc_${i}`
+            });
+            newBtn.href=`${selfUrl}?${queryParams}`;
+          }
+        }
+      }
+    };
+    const setStatus=(newStatus)=>{
+      console.log(`newStatus:${newStatus}`);
+      if(newStatus!==null){
+        displayMsgEnd();
+        document.getElementById("statusBox").textContent=JSON.stringify(newStatus);
+        setReaderBtnFromStatus(newStatus);
+      }
+    };
+    const queryParams=new URLSearchParams({
+      type:"polling",
+      key:"statusX"
+    });
+    const mainStatus=<?= mainStatus ?>;
+    let initStatus=null;
+    if(mainStatus!==""){
+      // console.log(JSON.stringify(JSON.parse(mainStatus)));
+      initStatus=JSON.parse(mainStatus);
+      setStatus(initStatus);
+      
+    }
+    const polling=new LongPolling(`${selfUrl}?${queryParams}`,initStatus);
+    while(isWebApp){
+      const newStatus=await polling.getChange();
+      setStatus(newStatus);
+    }
+  })();
+  (async()=>{
+    const moveToCurrentIndexBtn=document.getElementById("moveToCurrentIndex");
+    const setStatus=(newStatus)=>{
+      console.log(`new key:${currentKey} Status:${JSON.stringify(newStatus)}`);
+      if(newStatus!==null){
+        displayMsgEnd();
+        if(newStatus.errorMsg!=null){
+          displayMsg(newStatus.errorMsg);
+        }else{
+          if(currentMode==="error"){
+            changeButton("read");
+          }
+          writeToDisplay(newStatus,"write");
+          let mainText=newStatus.mainText;
+          if(mainText==null){
+            mainText="";
+          }
+          const fixedNewStatus={
+            ...newStatus,
+            mainText:convMainTextWithLink(mainText).replaceAll("\n","<br>")
+          }
+          writeToDisplay(fixedNewStatus,"read");
+
+          
+          if(newStatus.bookIndex==null){
+            currentBookIndex=null;
+            moveToCurrentIndexBtn.href=null;
+          }else{
+            currentBookIndex=newStatus.bookIndex;
+            const queryParams=new URLSearchParams({
+              key:`book_${currentBookIndex}`
+            });
+            const targetUrl=`${selfUrl}?${queryParams}`;
+            moveToCurrentIndexBtn.href=targetUrl;
+          }
+        }
+      }
+    };
+    const queryParams=new URLSearchParams({
+      type:"polling",
+      key:currentKey
+    });
+    const targetStatus=<?= targetStatus ?>;
+    console.log(`targetStatus:${targetStatus} ${typeof(targetStatus)}`);
+    let initStatus=null;
+    if(targetStatus!='null'){
+      initStatus=JSON.parse(targetStatus);
+      setStatus(initStatus);
+    }
+    const polling=new LongPolling(`${selfUrl}?${queryParams}`,initStatus);
+    while(isWebApp){
+      const newStatus=await polling.getChange();
+      setStatus(newStatus);
+    }
+  })();
+
+  
+  const postDisplayData=()=>{
+    const payload=getDisplayData();
+    console.log(`post display data :${payload}`);
+    displayMsg("入力したデータを送信しています。\nお待ちください。");
+    updateStatus(payload,currentKey);
+    // displayMsgEnd();
+  }
+  document.getElementById("sendBtn").addEventListener("click",()=>{postDisplayData()});
+
+  const showLedSearch=async(key,val)=>{
+    displayMsg("本棚にLED点灯リクエストを送信しています。\nお待ちください。");
+    // alert("hellowowowowowo");
+    showLed({
+      key:key,
+      val:val
+    });
+    // displayMsgEnd();
+  }
+  const showLedFromDisplay=(idName)=>{
+    const elem=document.getElementById(idName);
+    if(elem!=null){
+      const pos=parseInt(elem.innerHTML);
+      if(!isNaN(pos)){
+        showLedSearch("pos",pos);
+      }
+      
+    }
+  }
+  </script>
+</html>
